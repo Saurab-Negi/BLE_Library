@@ -6,7 +6,7 @@
 
     <VerticalStackLayout Padding="24" Spacing="16">
         <Button Text="Scan Nearby Devices" Clicked="OnScanClicked" />
-        <Label x:Name="StatusLabel" Text="Idle" />
+        <Button Text="Connect" Clicked="OnConnectClicked" />
     </VerticalStackLayout>
 
 </ContentPage>

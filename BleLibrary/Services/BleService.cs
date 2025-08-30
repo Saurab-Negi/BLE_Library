@@ -54,6 +54,7 @@ namespace BleLibrary.Services
         {
             if (!_ble.IsAvailable || !_ble.IsOn)
             {
+                _logger.LogInformation("Bluetooth unavailable or powered off.");
                 RaiseConnectionEvent(null, ConnectionStatus.PermissionDenied, "Bluetooth unavailable or powered off.");
                 return;
             }
@@ -134,6 +135,7 @@ namespace BleLibrary.Services
                 }
 
                 _connected = device;
+                _logger.LogInformation("Device Connected");
                 RaiseConnectionEvent(deviceId, ConnectionStatus.Connected, "Connected");
 
                 // Service discovery & subscriptions

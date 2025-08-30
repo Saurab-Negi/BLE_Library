@@ -1,5 +1,5 @@
-﻿using System.Diagnostics;
-using BleLibrary.Abstractions;
+﻿using BleLibrary.Abstractions;
+using System.Diagnostics;
 
 namespace BleApp
 {
@@ -15,22 +15,6 @@ namespace BleApp
             _ble = ble;
         }
 
-        protected override void OnAppearing()
-        {
-            base.OnAppearing();
-            if (!_subscribed)
-            {
-                _ble.DeviceFound += OnDeviceFound;
-                _subscribed = true;
-            }
-        }
-        protected override async void OnDisappearing()
-        {
-            base.OnDisappearing();
-            try { await _ble.StopScanForDevicesAsync(); } catch { }
-            if (_subscribed) { _ble.DeviceFound -= OnDeviceFound; _subscribed = false; }
-        }
-
         private async void OnScanClicked(object sender, EventArgs e)
         {
             try
@@ -43,21 +27,12 @@ namespace BleApp
 
                 Debug.WriteLine("==== BLE SCAN START ====");
 
-                // Option A: if your IBleService has a ScanAsync with a callback
-                // Adjust to your actual signature
-                //var devices = _ble.StartScanForDevicesAsync();
                 try { await _ble.StartScanForDevicesAsync(_cts.Token); } catch (OperationCanceledException) { }
 
-                // Option B: if it returns a list only
-                // var devices = await _ble.ScanAsync(TimeSpan.FromSeconds(10), _cts.Token);
-                // foreach (var d in devices)
-                //    Debug.WriteLine($"FOUND: {d.Name ?? "(no name)"} | {d.Id} | RSSI={d.Rssi}");
 
-                await Task.Delay(20000); // scan for 10 seconds
+                await Task.Delay(10000); // scan for 10 seconds
 
                 await _ble.StopScanForDevicesAsync();
-
-                //await devices;
 
                 Debug.WriteLine($"==== BLE SCAN DONE. ====");
             }
@@ -71,10 +46,27 @@ namespace BleApp
             }
         }
 
-        private void OnDeviceFound(object? sender, DeviceFoundEventArgs e)
+        private async void OnConnectClicked(object sender, EventArgs e)
         {
-            var id = e.Device;         // DeviceIdentifier (Id, Name)
-            Debug.WriteLine($"FOUND: {id.Name ?? "(no name)"} | {id.Id} | RSSI={e.Rssi}");
+            await _ble.StopScanForDevicesAsync();
+
+            _cts?.Cancel();
+            _cts = new CancellationTokenSource();
+
+            //var target = new DeviceIdentifier();
+
+            Debug.WriteLine("==== BLE CONNECT START ====");
+
+            var target = new DeviceIdentifier
+            (
+                Id: "00000000-0000-0000-0000-45412ad23195",  // or Guid/Uuid
+                Name: "LCONNECT ACE",
+                Address: null
+            );
+
+            var ok = await _ble.ConnectToDeviceAsync(target, _cts.Token);
+
+            Debug.WriteLine($"==== BLE CONNECT DONE. ====");
         }
 
         // Handle runtime permissions across Android versions & iOS
