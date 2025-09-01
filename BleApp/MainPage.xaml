@@ -4,9 +4,40 @@
              x:Class="BleApp.MainPage"
              Title="BLE Scanner">
 
-    <VerticalStackLayout Padding="24" Spacing="16">
-        <Button Text="Scan Nearby Devices" Clicked="OnScanClicked" />
-        <Button Text="Connect" Clicked="OnConnectClicked" />
-    </VerticalStackLayout>
+    <Grid Padding="24" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+        <!-- Row 0: Scan button -->
+        <Button Grid.Row="0"
+            Text="Scan Nearby Devices"
+            Clicked="OnScanClicked" />
+
+        <!-- Row 1: status/count -->
+        <Label Grid.Row="1"
+           Text="{Binding DeviceCountText}"
+           FontSize="12"
+           TextColor="{DynamicResource SecondaryTextColor}" />
+
+        <!-- Row 2: scrollable list -->
+        <CollectionView Grid.Row="2"
+                    x:Name="DevicesView"
+                    ItemsSource="{Binding Devices}"
+                    SelectionMode="Single"
+                    SelectionChanged="OnDeviceSelected"
+                    VerticalOptions="FillAndExpand">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Grid Padding="12" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                        <Label Grid.Row="0" Grid.Column="0"
+                   Text="{Binding Title}" FontAttributes="Bold" />
+                        <Label Grid.Row="1" Grid.Column="0"
+                   Text="{Binding Subtitle}" FontSize="12"
+                   TextColor="{DynamicResource SecondaryTextColor}" />
+                        <Label Grid.RowSpan="2" Grid.Column="1"
+                   VerticalOptions="Center"
+                   Text="{Binding Rssi, StringFormat='RSSI {0} dBm'}" />
+                    </Grid>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </Grid>
 
 </ContentPage>

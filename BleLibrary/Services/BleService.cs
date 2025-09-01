@@ -122,6 +122,7 @@ namespace BleLibrary.Services
             // Retry with backoff
             try
             {
+                _logger.LogInformation("Connection Initiated");
                 bool success = await WithRetries(async () =>
                 {
                     await _adapter.ConnectToDeviceAsync(device, cancellationToken: ct);
