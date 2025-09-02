@@ -3,6 +3,7 @@ using BleLibrary.Exceptions;
 using BleLibrary.Parsers;
 using Microsoft.Extensions.Logging;
 using Plugin.BLE;
+using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
 using Plugin.BLE.Abstractions.EventArgs;
 using System.Collections.Concurrent;
@@ -125,7 +126,11 @@ namespace BleLibrary.Services
                 _logger.LogInformation("Connection Initiated");
                 bool success = await WithRetries(async () =>
                 {
-                    await _adapter.ConnectToDeviceAsync(device, cancellationToken: ct);
+                    await _adapter.ConnectToDeviceAsync(
+                        device,
+                        new ConnectParameters(autoConnect: false, forceBleTransport: true),
+                        ct);
+
                     return device.State == Plugin.BLE.Abstractions.DeviceState.Connected;
                 }, attempts: 3);
 
@@ -151,10 +156,10 @@ namespace BleLibrary.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected connect error");
+                 _logger.LogError(ex, "Unexpected connect error");
                 RaiseConnectionEvent(deviceId, ConnectionStatus.ConnectionFailed, ex.Message, ex);
                 return false;
-            }
+           }
         }
 
         public async Task DisconnectDeviceAsync(DeviceIdentifier deviceId)
@@ -258,40 +263,47 @@ namespace BleLibrary.Services
             var services = await device.GetServicesAsync(ct);
             foreach (var svc in services)
             {
-                if (svc.Id != Uuids.Ftms && svc.Id != Uuids.Hrs && svc.Id != Uuids.Cps)
-                {
-                    continue;
-                }
+                //if (svc.Id != Uuids.Ftms && svc.Id != Uuids.Hrs && svc.Id != Uuids.Cps)
+                //{
+                //    continue;
+                //}
+
+                _logger.LogInformation($"Service UUID: {svc.Id}");
 
                 var chars = await svc.GetCharacteristicsAsync();
 
-                // FTMS: Indoor Bike Data
-                var ftmsData = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
-                if (ftmsData != null)
+                foreach (var characteristic in chars)
                 {
-                    await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
+                    _logger.LogInformation($"-- Characteristic UUID: {characteristic.Id}, Notifiable: {characteristic.CanUpdate}");
                 }
 
-                // FTMS: Control Point
-                var ctrl = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
-                if (ctrl != null)
-                {
-                    _ftmsControlPoint = ctrl;
-                }
+                //// FTMS: Indoor Bike Data
+                //var ftmsData = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
+                //if (ftmsData != null)
+                //{
+                //    await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
+                //}
 
-                // HRS: Heart Rate Measurement
-                var hr = chars.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
-                if (hr != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
-                }
+                //// FTMS: Control Point
+                //var ctrl = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
+                //if (ctrl != null)
+                //{
+                //    _ftmsControlPoint = ctrl;
+                //}
 
-                // CPS: Cycling Power Measurement
-                var cp = chars.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
-                if (cp != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
-                }
+                //// HRS: Heart Rate Measurement
+                //var hr = chars.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
+                //if (hr != null)
+                //{
+                //    await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
+                //}
+
+                //// CPS: Cycling Power Measurement
+                //var cp = chars.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
+                //if (cp != null)
+                //{
+                //    await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
+                //}
             }
         }
 
