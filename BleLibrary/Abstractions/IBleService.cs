@@ -2,8 +2,19 @@
 {
     public interface IBleService
     {
+        /// <summary>
+        /// Raised whenever a new device is discovered during scanning.
+        /// </summary>
         event EventHandler<DeviceFoundEventArgs> DeviceFound;
+
+        /// <summary>
+        /// Raised whenever a device's connection state changes.
+        /// </summary>
         event EventHandler<DeviceConnectionEventArgs> ConnectionStateChanged;
+        
+        /// <summary>
+        /// Raised whenever a device sends strongly-typed data.
+        /// </summary>
         event EventHandler<DeviceDataReceivedEventArgs> DataReceived;
 
         Task StartScanForDevicesAsync(CancellationToken ct = default);

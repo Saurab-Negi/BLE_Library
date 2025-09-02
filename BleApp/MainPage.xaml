@@ -31,9 +31,6 @@
                         <Label Grid.Row="1" Grid.Column="0"
                    Text="{Binding Subtitle}" FontSize="12"
                    TextColor="{DynamicResource SecondaryTextColor}" />
-                        <Label Grid.RowSpan="2" Grid.Column="1"
-                   VerticalOptions="Center"
-                   Text="{Binding Rssi, StringFormat='RSSI {0} dBm'}" />
                     </Grid>
                 </DataTemplate>
             </CollectionView.ItemTemplate>

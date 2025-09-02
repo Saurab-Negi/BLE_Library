@@ -3,12 +3,11 @@
     public sealed class DeviceFoundEventArgs : EventArgs
     {
         public DeviceIdentifier Device { get; }
-        public int Rssi { get; }
 
-        public DeviceFoundEventArgs(DeviceIdentifier device, int rssi)
+        public DeviceFoundEventArgs(DeviceIdentifier device)
         {
+            ArgumentNullException.ThrowIfNull(device);
             Device = device;
-            Rssi = rssi;
         }
     }
 
@@ -21,6 +20,7 @@
 
         public DeviceConnectionEventArgs(DeviceIdentifier device, ConnectionStatus status, string? message = null, Exception? error = null)
         {
+            ArgumentNullException.ThrowIfNull(device);
             Device = device;
             Status = status;
             Message = message;
@@ -38,6 +38,7 @@
 
         public DeviceDataReceivedEventArgs(DeviceIdentifier device, object data)
         {
+            ArgumentNullException.ThrowIfNull(device);
             Device = device;
             Data = data;
         }

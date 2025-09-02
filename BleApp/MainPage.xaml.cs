@@ -1,7 +1,8 @@
 ﻿using BleLibrary.Abstractions;
-using System.Diagnostics;
 using Plugin.BLE;
+using Plugin.BLE.Abstractions;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 
 namespace BleApp
 {
@@ -14,7 +15,7 @@ namespace BleApp
         private bool _connecting;
 
         public ObservableCollection<DiscoveredDevice> Devices { get; } = new();
-        private readonly Dictionary<string, DiscoveredDevice> _byId = new();
+        private readonly Dictionary<Guid, DiscoveredDevice> _byId = new();
 
         public string DeviceCountText => Devices.Count == 0
             ? "Found 0 devices"
@@ -107,12 +108,12 @@ namespace BleApp
         {
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                var id = e.Device.Id ?? string.Empty;
+                var id = e.Device.Id;
                 if (_byId.TryGetValue(id, out var existing))
                 {
-                    if (existing.Rssi != e.Rssi)
+                    if (existing.Rssi != e.Device.Rssi)
                     {
-                        existing.Rssi = e.Rssi;
+                        existing.Rssi = e.Device.Rssi;
                         var idx = Devices.IndexOf(existing);
                         if (idx >= 0)
                         {
@@ -125,10 +126,11 @@ namespace BleApp
                 {
                     var item = new DiscoveredDevice
                     {
-                        Id = id,
+                        Id = e.Device.Id,
                         Name = e.Device.Name,
-                        Address = e.Device.Address,
-                        Rssi = e.Rssi
+                        Rssi = e.Device.Rssi,
+                        NativeDevice = e.Device.NativeDevice,
+                        State = DeviceState.Disconnected
                     };
                     _byId[id] = item;
                     Devices.Add(item);
@@ -152,7 +154,7 @@ namespace BleApp
             {
                 await _ble.StopScanForDevicesAsync();
 
-                var id = new DeviceIdentifier(item.Id, item.Name, item.Address);
+                var id = new DeviceIdentifier(item.Id, item.Name, item.Rssi, item.NativeDevice, DeviceState.Disconnected);
                 var ok = await _ble.ConnectToDeviceAsync(id);
                 if (!ok)
                 {
@@ -175,7 +177,7 @@ namespace BleApp
             // Optional: toast/status. Keep it minimal for demo.
             MainThread.BeginInvokeOnMainThread(async () =>
             {
-                var name = string.IsNullOrWhiteSpace(e.Device.Name) ? e.Device.Id : e.Device.Name;
+                var name = string.IsNullOrWhiteSpace(e.Device.Name) ? $"Device {e.Device.Id}" : e.Device.Name;
                 switch (e.Status)
                 {
                     case ConnectionStatus.Connected:
@@ -200,14 +202,14 @@ namespace BleApp
 
         public sealed class DiscoveredDevice
         {
-            public string Id { get; init; } = "";
+            public Guid Id { get; init; }
             public string? Name { get; init; }
-            public string? Address { get; init; }
             public int Rssi { get; set; }
+            public object? NativeDevice { get; init; }
+            public DeviceState State { get; set; }
 
-            public DeviceIdentifier DeviceIdentifier => new(Id, Name, Address);
             public string Title => string.IsNullOrWhiteSpace(Name) ? "Unknown" : Name!;
-            public string Subtitle => string.IsNullOrWhiteSpace(Address) ? Id : $"{Id} • {Address}";
+            public string Subtitle => $"{Id} • RSSI {Rssi}";
         }
 
         // Handle runtime permissions across Android versions & iOS

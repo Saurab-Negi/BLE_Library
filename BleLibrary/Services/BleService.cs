@@ -20,8 +20,8 @@ namespace BleLibrary.Services
         private readonly ILogger<BleService> _logger;
 
         private readonly List<IProfileParser> _parsers;
-        private readonly ConcurrentDictionary<string, IDevice> _deviceCache = new();
-        private readonly HashSet<string> _seenDevices = [];
+        private readonly ConcurrentDictionary<Guid, IDevice> _deviceCache = new();
+        private readonly HashSet<Guid> _seenDevices = [];
         private IDevice? _connected;
         private ICharacteristic? _ftmsControlPoint;
 
@@ -225,8 +225,8 @@ namespace BleLibrary.Services
                 }
 
                 _deviceCache[id.Id] = e.Device;
-                DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id, e.Device.Rssi));
-                _logger.LogInformation("Found device: {Name} ({Id}) RSSI {Rssi}", id.Name, id.Id, e.Device.Rssi);
+                DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
+                _logger.LogInformation("Found device: Name: {Name} Id: {Id} RSSI: {Rssi} State: {State} Native: {Native}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice);
             }
             catch (Exception ex)
             {
@@ -355,13 +355,13 @@ namespace BleLibrary.Services
 
         private void RaiseConnectionEvent(DeviceIdentifier? id, ConnectionStatus status, string? msg, Exception? ex = null)
         {
-            var device = id ?? (_connected is null ? new DeviceIdentifier("unknown") : ToIdentifier(_connected));
+            var device = id ?? (_connected is null ? new DeviceIdentifier(Guid.Empty, "unknown", 0, null!, DeviceState.Disconnected) : ToIdentifier(_connected));
             ConnectionStateChanged?.Invoke(this, new DeviceConnectionEventArgs(device, status, msg, ex));
         }
 
         private static DeviceIdentifier ToIdentifier(IDevice d)
         {
-            return new(d.Id.ToString(), d.Name);
+            return new(d.Id, d.Name ?? "unknown", d.Rssi, d, d.State);
         }
 
         public void Dispose()
