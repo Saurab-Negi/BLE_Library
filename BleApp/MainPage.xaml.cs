@@ -209,7 +209,7 @@ namespace BleApp
             public DeviceState State { get; set; }
 
             public string Title => string.IsNullOrWhiteSpace(Name) ? "Unknown" : Name!;
-            public string Subtitle => $"{Id} • RSSI {Rssi}";
+            public string Subtitle => $"{Id}";
         }
 
         // Handle runtime permissions across Android versions & iOS

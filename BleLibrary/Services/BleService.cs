@@ -226,7 +226,7 @@ namespace BleLibrary.Services
 
                 _deviceCache[id.Id] = e.Device;
                 DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
-                _logger.LogInformation("Found device: Name: {Name} Id: {Id} RSSI: {Rssi} State: {State} Native: {Native}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice);
+                _logger.LogInformation("Found device: Name: {Name} Id: {Id} RSSI: {Rssi} State: {State} Address: {Address}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice);
             }
             catch (Exception ex)
             {
@@ -361,7 +361,7 @@ namespace BleLibrary.Services
 
         private static DeviceIdentifier ToIdentifier(IDevice d)
         {
-            return new(d.Id, d.Name ?? "unknown", d.Rssi, d, d.State);
+            return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State);
         }
 
         public void Dispose()
