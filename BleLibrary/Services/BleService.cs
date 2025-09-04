@@ -70,7 +70,7 @@ namespace BleLibrary.Services
 
             try
             {
-                // Filter by target services (lets Plugin.BLE do the heavy lifting)
+                // Filter by target services
                 var targetServices = new[] { Uuids.Ftms, Uuids.Hrs, Uuids.Cps };
                 _logger.LogInformation("Starting BLE scan filtered by FTMS/HRS/CPS");
 
@@ -78,12 +78,10 @@ namespace BleLibrary.Services
                     serviceUuids: null, // set serviceUuids: null if you want to see anything nearby
                     deviceFilter: null,
                     cancellationToken: ct);
-
-                // Note: DeviceDiscovered will fire during scan
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Scan failed");
+                _logger.LogError(ex, "Error in StartScanForDevicesAsync");
                 _isScanning = false;
                 throw new BleServiceException("Failed to start scan", ex);
             }
@@ -102,7 +100,7 @@ namespace BleLibrary.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Stop scan failed");
+                _logger.LogError(ex, "Error in StopScanForDevicesAsync");
             }
             finally
             {
@@ -141,8 +139,6 @@ namespace BleLibrary.Services
                 }
 
                 _connected = device;
-                _logger.LogInformation("Device Connected");
-                RaiseConnectionEvent(deviceId, ConnectionStatus.Connected, "Connected");
 
                 // Service discovery & subscriptions
                 await DiscoverAndSubscribeAsync(device, ct);
@@ -151,12 +147,11 @@ namespace BleLibrary.Services
             catch (BleServiceException ex)
             {
                 _logger.LogError(ex, "Connection retries exhausted");
-                RaiseConnectionEvent(deviceId, ConnectionStatus.ConnectionFailed, ex.Message, ex);
                 return false;
             }
             catch (Exception ex)
             {
-                 _logger.LogError(ex, "Unexpected connect error");
+                 _logger.LogError(ex, "Error in ConnectToDeviceAsync");
                 RaiseConnectionEvent(deviceId, ConnectionStatus.ConnectionFailed, ex.Message, ex);
                 return false;
            }
@@ -173,13 +168,12 @@ namespace BleLibrary.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Disconnect failed");
+                _logger.LogError(ex, "Error in DisconnectDeviceAsync");
             }
             finally
             {
                 _connected = null;
                 _ftmsControlPoint = null;
-                RaiseConnectionEvent(deviceId, ConnectionStatus.Disconnected, "Disconnected");
             }
         }
 
@@ -212,7 +206,6 @@ namespace BleLibrary.Services
         {
             try
             {
-                // Extra RSSI filter
                 if (e.Device is null || e.Device.Rssi < MinRssi)
                 {
                     return;
@@ -226,36 +219,54 @@ namespace BleLibrary.Services
 
                 _deviceCache[id.Id] = e.Device;
                 DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
-                _logger.LogInformation("Found device: Name: {Name} Id: {Id} RSSI: {Rssi} State: {State} Address: {Address}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice);
+                _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
+                    " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in DeviceDiscovered");
+                _logger.LogError(ex, "Error in OnDeviceDiscovered");
             }
         }
 
         private void OnDeviceConnected(object? sender, DeviceEventArgs e)
         {
-            if (e.Device is null)
+            try
             {
-                return;
+                if (e.Device is null)
+                {
+                    return;
+                }
+                var id = ToIdentifier(e.Device);
+                _logger.LogInformation("Device connected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
+                    " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
+                RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
             }
-            var id = ToIdentifier(e.Device);
-            _logger.LogInformation("Device connected: {Name} ({Id})", id.Name, id.Id);
-            RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in OnDeviceConnected");
+            }
         }
 
         private void OnDeviceDisconnected(object? sender, DeviceEventArgs e)
         {
-            if (e.Device is null)
+            try
             {
-                return;
+                if (e.Device is null)
+                {
+                    return;
+                }
+                var id = ToIdentifier(e.Device);
+                _connected = null;
+                _ftmsControlPoint = null;
+                _logger.LogInformation("Device disconnected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
+                    " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords);
+                RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
             }
-            var id = ToIdentifier(e.Device);
-            _connected = null;
-            _ftmsControlPoint = null;
-            _logger.LogInformation("Device disconnected: {Name} ({Id})", id.Name, id.Id);
-            RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in OnDeviceDisconnected");
+            }
         }
 
         private async Task DiscoverAndSubscribeAsync(IDevice device, CancellationToken ct)
@@ -270,40 +281,40 @@ namespace BleLibrary.Services
 
                 _logger.LogInformation($"Service UUID: {svc.Id}");
 
-                var chars = await svc.GetCharacteristicsAsync();
+                var characteristics = await svc.GetCharacteristicsAsync();
 
-                foreach (var characteristic in chars)
+                foreach (var chars in characteristics)
                 {
-                    _logger.LogInformation($"-- Characteristic UUID: {characteristic.Id}, Notifiable: {characteristic.CanUpdate}");
+                    _logger.LogInformation($"Characteristic UUID: {chars.Id}, Notifiable: {chars.CanUpdate}");
                 }
 
-                //// FTMS: Indoor Bike Data
-                //var ftmsData = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
-                //if (ftmsData != null)
-                //{
-                //    await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
-                //}
+                // FTMS: Indoor Bike Data
+                var ftmsData = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
+                if (ftmsData != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
+                }
 
-                //// FTMS: Control Point
-                //var ctrl = chars.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
-                //if (ctrl != null)
-                //{
-                //    _ftmsControlPoint = ctrl;
-                //}
+                // FTMS: Control Point
+                var ctrl = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
+                if (ctrl != null)
+                {
+                    _ftmsControlPoint = ctrl;
+                }
 
-                //// HRS: Heart Rate Measurement
-                //var hr = chars.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
-                //if (hr != null)
-                //{
-                //    await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
-                //}
+                // HRS: Heart Rate Measurement
+                var hr = characteristics.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
+                if (hr != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
+                }
 
-                //// CPS: Cycling Power Measurement
-                //var cp = chars.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
-                //if (cp != null)
-                //{
-                //    await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
-                //}
+                // CPS: Cycling Power Measurement
+                var cp = characteristics.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
+                if (cp != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
+                }
             }
         }
 
@@ -323,6 +334,10 @@ namespace BleLibrary.Services
                         if (parser.TryParse(payload, out var parsed) && parsed is not null)
                         {
                             var id = ToIdentifier(device);
+                            _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
+                                " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
+                                " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
+                                serviceId, ch.Id, parsed);
                             DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, parsed));
                             break; // first match wins
                         }
@@ -355,13 +370,13 @@ namespace BleLibrary.Services
 
         private void RaiseConnectionEvent(DeviceIdentifier? id, ConnectionStatus status, string? msg, Exception? ex = null)
         {
-            var device = id ?? (_connected is null ? new DeviceIdentifier(Guid.Empty, "unknown", 0, null!, DeviceState.Disconnected) : ToIdentifier(_connected));
+            var device = id ?? (_connected is null ? new DeviceIdentifier(Guid.Empty, "unknown", 0, null!, DeviceState.Disconnected, null) : ToIdentifier(_connected));
             ConnectionStateChanged?.Invoke(this, new DeviceConnectionEventArgs(device, status, msg, ex));
         }
 
         private static DeviceIdentifier ToIdentifier(IDevice d)
         {
-            return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State);
+            return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State, d.AdvertisementRecords);
         }
 
         public void Dispose()

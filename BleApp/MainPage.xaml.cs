@@ -154,7 +154,7 @@ namespace BleApp
             {
                 await _ble.StopScanForDevicesAsync();
 
-                var id = new DeviceIdentifier(item.Id, item.Name, item.Rssi, item.NativeDevice, DeviceState.Disconnected);
+                var id = new DeviceIdentifier(item.Id, item.Name, item.Rssi, item.NativeDevice, DeviceState.Disconnected, item.AdvertisementRecords);
                 var ok = await _ble.ConnectToDeviceAsync(id);
                 if (!ok)
                 {
@@ -207,6 +207,7 @@ namespace BleApp
             public int Rssi { get; set; }
             public object? NativeDevice { get; init; }
             public DeviceState State { get; set; }
+            public IReadOnlyList<AdvertisementRecord> AdvertisementRecords { get; init; }
 
             public string Title => string.IsNullOrWhiteSpace(Name) ? "Unknown" : Name!;
             public string Subtitle => $"{Id}";
