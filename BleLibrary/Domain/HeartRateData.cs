@@ -17,7 +17,7 @@
         {
             var rr = (RrIntervals?.Count ?? 0) > 0 ? string.Join(",", RrIntervals) : "none";
             var energy = EnergyExpended.HasValue ? EnergyExpended.Value.ToString() : "none";
-            return $"HR={HeartRateBpm}, Energy={energy}, RR=[{rr}]";
+            return $"HR={HeartRateBpm}, RR=[{rr}]";
         }
     }
 }

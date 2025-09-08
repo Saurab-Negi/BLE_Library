@@ -6,6 +6,7 @@ using Plugin.BLE;
 using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
 using Plugin.BLE.Abstractions.EventArgs;
+using Plugin.BLE.Abstractions.Exceptions;
 using System.Collections.Concurrent;
 
 namespace BleLibrary.Services
@@ -28,6 +29,13 @@ namespace BleLibrary.Services
         private volatile bool _isScanning;
         private const int MinRssi = -85;
 
+        private readonly ConcurrentDictionary<Guid, DateTimeOffset> _lastSeen = new();
+        private CancellationTokenSource? _reconnectCts;
+        private const int OutOfRangeGraceMs = 10_000; // last seen > 10s → likely out of range
+        private const int ConnectTimeoutMs = 7_000; // iOS needs our own timeout
+        private const int ScanWindowMs = 3_000; // brief scan between attempts to refresh cache
+        private volatile bool _autoReconnectEnabled = true;
+
         public event EventHandler<DeviceFoundEventArgs>? DeviceFound;
         public event EventHandler<DeviceConnectionEventArgs>? ConnectionStateChanged;
         public event EventHandler<DeviceDataReceivedEventArgs>? DataReceived;
@@ -42,6 +50,7 @@ namespace BleLibrary.Services
             _adapter.DeviceDiscovered += OnDeviceDiscovered;
             _adapter.DeviceConnected += OnDeviceConnected;
             _adapter.DeviceDisconnected += OnDeviceDisconnected;
+            _adapter.DeviceConnectionLost += OnDeviceConnectionLost;
 
             // Register parsers
             _parsers = [
@@ -124,10 +133,7 @@ namespace BleLibrary.Services
                 _logger.LogInformation("Connection Initiated");
                 bool success = await WithRetries(async () =>
                 {
-                    await _adapter.ConnectToDeviceAsync(
-                        device,
-                        new ConnectParameters(autoConnect: false, forceBleTransport: true),
-                        ct);
+                    await ConnectKnownWithTimeoutAsync(device.Id, ct);
 
                     return device.State == Plugin.BLE.Abstractions.DeviceState.Connected;
                 }, attempts: 3);
@@ -144,9 +150,26 @@ namespace BleLibrary.Services
                 await DiscoverAndSubscribeAsync(device, ct);
                 return true;
             }
+            catch (DeviceConnectionException ex)
+            {
+                // Android usually throws quickly if OOR; iOS might reach here if our token timed out
+                var last = _lastSeen.TryGetValue(deviceId.Id, out var ts) ? ts : DateTimeOffset.MinValue;
+                var isOutOfRange = (DateTimeOffset.UtcNow - last).TotalMilliseconds > OutOfRangeGraceMs
+                                   || GattOutOfRange(ex);
+
+                RaiseConnectionEvent(deviceId, isOutOfRange ? ConnectionStatus.OutOfRange : ConnectionStatus.ConnectionFailed,
+                    ex.Message, ex);
+                _logger.LogWarning(ex, "ConnectToDeviceAsync failed ({Status})", isOutOfRange ? "OutOfRange" : "ConnectionFailed");
+
+                if (isOutOfRange && _autoReconnectEnabled)
+                    _ = StartAutoReconnect(deviceId, default);
+
+                return false;
+            }
             catch (BleServiceException ex)
             {
                 _logger.LogError(ex, "Connection retries exhausted");
+                RaiseConnectionEvent(deviceId, ConnectionStatus.ConnectionFailed, ex.Message, ex);
                 return false;
             }
             catch (Exception ex)
@@ -161,6 +184,9 @@ namespace BleLibrary.Services
         {
             try
             {
+                _autoReconnectEnabled = false; // optional: prevent loop restarting
+                _reconnectCts?.Cancel();
+
                 if (_connected != null)
                 {
                     await _adapter.DisconnectDeviceAsync(_connected);
@@ -217,6 +243,7 @@ namespace BleLibrary.Services
                     return;
                 }
 
+                _lastSeen[e.Device.Id] = DateTimeOffset.UtcNow;
                 _deviceCache[id.Id] = e.Device;
                 DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
@@ -266,6 +293,38 @@ namespace BleLibrary.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in OnDeviceDisconnected");
+            }
+        }
+
+        private void OnDeviceConnectionLost(object? sender, DeviceErrorEventArgs e)
+        {
+            try
+            {
+                if (e.Device is null) return;
+                var id = ToIdentifier(e.Device);
+
+                _connected = null;
+                _ftmsControlPoint = null;
+
+                _logger.LogWarning("Device connection lost: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
+                    " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords);
+
+                // Declare why we think it was lost
+                var last = _lastSeen.TryGetValue(id.Id, out var ts) ? ts : DateTimeOffset.MinValue;
+                var isOutOfRange = (DateTimeOffset.UtcNow - last).TotalMilliseconds > OutOfRangeGraceMs;
+
+                RaiseConnectionEvent(id, isOutOfRange ? ConnectionStatus.OutOfRange : ConnectionStatus.ConnectionLost,
+                    isOutOfRange ? "Device likely out of range." : "Connection lost.");
+
+                if (_autoReconnectEnabled)
+                {
+                    _ = StartAutoReconnect(id, default); // fire-and-forget
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in OnDeviceConnectionLost");
             }
         }
 
@@ -379,11 +438,129 @@ namespace BleLibrary.Services
             return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State, d.AdvertisementRecords);
         }
 
+        private async Task StartAutoReconnect(DeviceIdentifier deviceId, CancellationToken ct)
+        {
+            // Cancel any existing loop
+            try { _reconnectCts?.Cancel(); } catch { /* ignore */ }
+            _reconnectCts = new CancellationTokenSource();
+
+            var token = _reconnectCts.Token;
+            var attempts = 0;
+            var maxBackoffMs = 20_000;
+
+            _logger.LogInformation("Auto-reconnect loop started for {Name} ({Id})", deviceId.Name, deviceId.Id);
+
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    // 1) Fast path: Connect to known device GUID
+                    await ConnectKnownWithTimeoutAsync(deviceId.Id, token);
+
+                    // 2) On success, wire up and exit loop
+                    if (_deviceCache.TryGetValue(deviceId.Id, out var dev) &&
+                        dev.State == Plugin.BLE.Abstractions.DeviceState.Connected)
+                    {
+                        _connected = dev;
+                        RaiseConnectionEvent(deviceId, ConnectionStatus.Connected, "Reconnected");
+                        await DiscoverAndSubscribeAsync(dev, token);
+                        _logger.LogInformation("Auto-reconnect succeeded for {Id}", deviceId.Id);
+                        return;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Either we cancelled, or timeout hit
+                    if (token.IsCancellationRequested) break;
+
+                    // Timeout likely means iOS out-of-range
+                    RaiseConnectionEvent(deviceId, ConnectionStatus.OutOfRange, "Reconnect timed out; likely out of range.");
+                }
+                catch (DeviceConnectionException ex)
+                {
+                    // Android OOR/GATT
+                    var status = GattOutOfRange(ex) ? ConnectionStatus.OutOfRange : ConnectionStatus.ConnectionFailed;
+                    RaiseConnectionEvent(deviceId, status, ex.Message, ex);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Reconnect attempt failed");
+                    RaiseConnectionEvent(deviceId, ConnectionStatus.ConnectionFailed, ex.Message, ex);
+                }
+
+                // 3) Brief scan to refresh presence and update lastSeen
+                try
+                {
+                    await BriefScanAsync(TimeSpan.FromMilliseconds(ScanWindowMs), token);
+                }
+                catch { /* non-fatal */ }
+
+                // 4) Backoff
+                attempts++;
+                var delayMs = Math.Min(maxBackoffMs, 500 * (int)Math.Pow(1.8, attempts));
+                await Task.Delay(delayMs, token);
+            }
+
+            _logger.LogInformation("Auto-reconnect loop ended for {Id}", deviceId.Id);
+        }
+
+        private async Task BriefScanAsync(TimeSpan window, CancellationToken ct)
+        {
+            if (_isScanning) return;
+
+            try
+            {
+                _isScanning = true;
+                using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                scanCts.CancelAfter(window);
+
+                await _adapter.StartScanningForDevicesAsync(
+                    serviceUuids: null,
+                    deviceFilter: null,
+                    cancellationToken: scanCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // expected when window ends
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Brief scan failed");
+            }
+            finally
+            {
+                try { await _adapter.StopScanningForDevicesAsync(); } catch { }
+                _isScanning = false;
+            }
+        }
+
+        private static bool GattOutOfRange(Exception ex)
+        {
+            var msg = ex.Message?.ToLowerInvariant() ?? "";
+            // Heuristic: typical Android failures when device is gone
+            return msg.Contains("gatt") || msg.Contains("133") || msg.Contains("status 8") ||
+                   msg.Contains("status 19") || msg.Contains("device not found") || msg.Contains("failed to connect");
+        }
+
+        private async Task ConnectKnownWithTimeoutAsync(Guid deviceId, CancellationToken outer)
+        {
+            // iOS: ConnectToKnownDeviceAsync never times out by itself — we impose one.
+            // Android: if OOR, this will throw quickly; our timeout is just a ceiling.
+            using var timeout = new CancellationTokenSource(ConnectTimeoutMs);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(outer, timeout.Token);
+
+            await _adapter.ConnectToKnownDeviceAsync(
+                deviceId,
+                new ConnectParameters(autoConnect: false, forceBleTransport: true),
+                linked.Token);
+        }
+
         public void Dispose()
         {
             _adapter.DeviceDiscovered -= OnDeviceDiscovered;
             _adapter.DeviceConnected -= OnDeviceConnected;
             _adapter.DeviceDisconnected -= OnDeviceDisconnected;
+            _adapter.DeviceConnectionLost -= OnDeviceConnectionLost;
         }
     }
 }

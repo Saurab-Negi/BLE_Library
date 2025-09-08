@@ -5,6 +5,9 @@
         Connected,
         Disconnected,
         ConnectionFailed,
-        PermissionDenied
+        PermissionDenied,
+        ConnectionLost, // Unexpected disconnect
+        OutOfRange, // RSSI degraded / consecutive read failures
+        BatteryLow
     }
 }
