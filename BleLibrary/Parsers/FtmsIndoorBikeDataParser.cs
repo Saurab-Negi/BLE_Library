@@ -9,6 +9,21 @@ namespace BleLibrary.Parsers
     /// </summary>
     public sealed class FtmsIndoorBikeDataParser : IProfileParser
     {
+        // FTMS Indoor Bike Data flags (bit positions)
+        private const int FLAG_MORE_DATA = 0;  // 0 => Instantaneous Speed present
+        private const int FLAG_AVG_SPEED_PRESENT = 1;
+        private const int FLAG_INSTANT_CADENCE_PRESENT = 2;  // uint16, 0.5 rpm units
+        private const int FLAG_AVG_CADENCE_PRESENT = 3;
+        private const int FLAG_TOTAL_DISTANCE_PRESENT = 4;  // 24-bit
+        private const int FLAG_RESISTANCE_LEVEL_PRESENT = 5;  // sint16
+        private const int FLAG_INSTANT_POWER_PRESENT = 6;  // sint16, watts
+        private const int FLAG_AVG_POWER_PRESENT = 7;
+        private const int FLAG_EXPENDED_ENERGY_PRESENT = 8;  // total(16) + perHour(16) + perMin(8)
+        private const int FLAG_HEART_RATE_PRESENT = 9;  // uint8
+        private const int FLAG_MET_PRESENT = 10; // uint8
+        private const int FLAG_ELAPSED_TIME_PRESENT = 11; // uint16 (s)
+        private const int FLAG_REMAINING_TIME_PRESENT = 12; // uint16 (s)
+
         public bool CanParse(Guid serviceUuid, Guid characteristicUuid)
         {
             return serviceUuid == Uuids.Ftms && characteristicUuid == Uuids.Ftms_IndoorBikeData;
@@ -17,68 +32,66 @@ namespace BleLibrary.Parsers
         public bool TryParse(ReadOnlySpan<byte> payload, out IDeviceData? data)
         {
             data = null;
-            if (payload.Length < 4)
+            if (payload.Length < 2)
             {
                 return false;
             }
 
             // Flags: 2 bytes little-endian
             ushort flags = (ushort)(payload[0] | (payload[1] << 8));
-            int index = 2;
+            int i = 2;
 
-            int? speedDds = null;
+            float? speedKmph = null;
             int? cadenceRpm = null;
-            int? powerW = null;
+            int? powerWatt = null;
 
-            // Example (incomplete): if flags indicate speed present (bit positions per spec)
-            // NOTE: Replace bit checks with exact FTMS spec bits for Indoor Bike Data (0x2AD2).
-            // The below is a placeholder structure for extension.
-            bool instantaneousSpeedPresent = (flags & (1 << 0)) != 0;     // placeholder
-            bool instantaneousCadencePresent = (flags & (1 << 2)) != 0;   // placeholder
-            bool instantaneousPowerPresent = (flags & (1 << 5)) != 0;     // placeholder
-
-            if (instantaneousSpeedPresent)
+            // Instantaneous Speed present when bit0 == 0
+            bool speedPresent = ((flags >> FLAG_MORE_DATA) & 0x1) == 0;
+            if (speedPresent)
             {
-                if (payload.Length < index + 2)
-                {
-                    return false;
-                }
-                // FTMS speed unit for indoor bike data is typically in 0.01 km/h or 0.1 m/s. Adjust as per spec.
-                ushort speedRaw = (ushort)(payload[index] | (payload[index + 1] << 8));
-                index += 2;
-                // Store as decimeters per second (placeholder conversion)
-                speedDds = speedRaw; // TODO: correct unit scaling per SIG spec
+                if (payload.Length < i + 2) return false;
+                ushort speedRaw = (ushort)(payload[i] | (payload[i + 1] << 8));
+                i += 2;
+                // speedRaw in 0.01 km/h -> km/h
+                speedKmph = (float)(speedRaw / 100.0);
+                Console.WriteLine($"=== speedKmph === {speedKmph}");
             }
 
-            if (instantaneousCadencePresent)
+            // Instantaneous Cadence (0.5 rpm units)
+            if (((flags >> FLAG_INSTANT_CADENCE_PRESENT) & 0x1) != 0)
             {
-                if (payload.Length < index + 2)
-                {
-                    return false;
-                }
-                ushort cadenceRaw = (ushort)(payload[index] | (payload[index + 1] << 8));
-                index += 2;
-                cadenceRpm = cadenceRaw / 2; // TODO: correct scaling (placeholder)
+                if (payload.Length < i + 2) return false;
+                ushort cadenceRaw = (ushort)(payload[i] | (payload[i + 1] << 8));
+                i += 2;
+                cadenceRpm = cadenceRaw / 2;
+                Console.WriteLine($"=== cadenceRpm === {cadenceRpm}");
             }
 
-            if (instantaneousPowerPresent)
+            // Skip fields we don't expose
+            if (((flags >> FLAG_AVG_SPEED_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+            if (((flags >> FLAG_AVG_CADENCE_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+            if (((flags >> FLAG_TOTAL_DISTANCE_PRESENT) & 0x1) != 0) { if (payload.Length < i + 3) return false; i += 3; }
+            if (((flags >> FLAG_RESISTANCE_LEVEL_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+
+            // Instantaneous Power (watts)
+            if (((flags >> FLAG_INSTANT_POWER_PRESENT) & 0x1) != 0)
             {
-                if (payload.Length < index + 2)
-                {
-                    return false;
-                }
-                short powerRaw = (short)(payload[index] | (payload[index + 1] << 8));
-                index += 2;
-                powerW = powerRaw;
+                if (payload.Length < i + 2) return false;
+                short powerRaw = (short)(payload[i] | (payload[i + 1] << 8));
+                i += 2;
+                powerWatt = powerRaw;
+                Console.WriteLine($"=== powerWatt === {powerWatt}");
             }
 
-            data = new IndoorBikeData
-            {
-                InstantaneousPowerWatts = powerW,
-                CadenceRpm = cadenceRpm,
-                SpeedDecimetersPerSecond = speedDds,
-                HeartRateBpm = null // sometimes exposed via other characteristics; optional merge if available
-            };
+            // Skip Average Power, Energy, HR, MET, Elapsed/Remaining
+            if (((flags >> FLAG_AVG_POWER_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+            if (((flags >> FLAG_EXPENDED_ENERGY_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; if (payload.Length < i + 2) return false; i += 2; if (payload.Length < i + 1) return false; i += 1; }
+            if (((flags >> FLAG_HEART_RATE_PRESENT) & 0x1) != 0) { if (payload.Length < i + 1) return false; i += 1; }
+            if (((flags >> FLAG_MET_PRESENT) & 0x1) != 0) { if (payload.Length < i + 1) return false; i += 1; }
+            if (((flags >> FLAG_ELAPSED_TIME_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+            if (((flags >> FLAG_REMAINING_TIME_PRESENT) & 0x1) != 0) { if (payload.Length < i + 2) return false; i += 2; }
+
+            data = new IndoorBikeData(powerWatt, cadenceRpm, speedKmph);
             return true;
         }
     }
