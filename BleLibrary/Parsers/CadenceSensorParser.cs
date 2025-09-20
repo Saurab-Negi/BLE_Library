@@ -20,18 +20,17 @@ namespace BleLibrary.Parsers
             if (payload.Length < 1) return false;
 
             byte flags = payload[0];
-            Console.WriteLine($"CSC raw={Convert.ToHexString(payload.ToArray())} len={payload.Length}");
-            Console.WriteLine($"CSC flags=0x{flags} (Wheel={(flags & 0x01) != 0}, Crank={(flags & 0x02) != 0})");
+            Console.WriteLine($"CSC payload={Convert.ToHexString(payload.ToArray())}");
 
             int i = 1;
 
             bool wheelPresent = ((flags >> FLAG_WHEEL_PRESENT) & 1) != 0;
             bool crankPresent = ((flags >> FLAG_CRANK_PRESENT) & 1) != 0;
 
-            int? wheelRev = null;
-            int? lastWheelEventTime = null;
-            int? crankRev = null;
-            int? lastCrankEventTime = null;
+            uint? wheelRev = null;
+            ushort? lastWheelEventTime = null;
+            ushort? crankRev = null;
+            ushort? lastCrankEventTime = null;
 
             if (wheelPresent)
             {
@@ -47,8 +46,10 @@ namespace BleLibrary.Parsers
                 ushort wheelTime = (ushort)(payload[i] | (payload[i + 1] << 8));
                 i += 2;
 
-                wheelRev = unchecked((int)wheelRevs); // safe cast; you’re using int?
+                wheelRev = unchecked(wheelRevs);
+                Console.WriteLine($"=== wheelRev === {wheelRev}");
                 lastWheelEventTime = wheelTime;
+                Console.WriteLine($"=== lastWheelEventTime === {lastWheelEventTime}");
             }
 
             if (crankPresent)
@@ -63,7 +64,9 @@ namespace BleLibrary.Parsers
                 i += 2;
 
                 crankRev = crankRevs;
+                Console.WriteLine($"=== crankRev === {crankRev}");
                 lastCrankEventTime = crankTime;
+                Console.WriteLine($"=== lastCrankEventTime === {lastCrankEventTime}");
             }
 
             data = new CadenceSensorData(wheelRev, lastWheelEventTime, crankRev, lastCrankEventTime);

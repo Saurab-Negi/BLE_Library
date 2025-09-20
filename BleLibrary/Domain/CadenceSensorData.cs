@@ -2,26 +2,26 @@
 {
     public sealed class CadenceSensorData : IDeviceData
     {
-        public int? WheelRev { get; init; }
-        public int? LastWheelEventTime { get; init; }
-        public int? CrankRev { get; init; }
-        public int? LastCrankEventTime { get; init; }
+        public uint? WheelRev { get; init; } // cumulative
+        public ushort? LastWheelEventTime { get; init; } // 1/1024 s
+        public ushort? CrankRev { get; init; } // cumulative
+        public ushort? LastCrankEventTime { get; init; } // 1/1024 s
 
-        public CadenceSensorData(int? WheelRev, int? LastWheelEventTime, int? CrankRev, int? LastCrankEventTime)
+        public CadenceSensorData(uint? WheelRev, ushort? LastWheelEventTime, ushort? CrankRev, ushort? LastCrankEventTime)
         {
-            WheelRev = WheelRev;
-            LastWheelEventTime = LastWheelEventTime;
-            CrankRev = CrankRev;
-            LastCrankEventTime = LastCrankEventTime;
+            this.WheelRev = WheelRev;
+            this.LastWheelEventTime = LastWheelEventTime;
+            this.CrankRev = CrankRev;
+            this.LastCrankEventTime = LastCrankEventTime;
         }
 
-        public override string ToString()
-        {
-            var wR = WheelRev?.ToString() ?? "none";
-            var lW = LastWheelEventTime?.ToString() ?? "none";
-            var cR = CrankRev?.ToString() ?? "none";
-            var lC = LastCrankEventTime?.ToString() ?? "none";
-            return $"WheelRev={wR} rpm, LastWheelEventTime={lW} ms, CrankRev={cR} rpm, LastCrankEventTime={lC} ms";
-        }
+        //public override string ToString()
+        //{
+        //    var wR = WheelRev?.ToString() ?? "none";
+        //    var lW = LastWheelEventTime?.ToString() ?? "none";
+        //    var cR = CrankRev?.ToString() ?? "none";
+        //    var lC = LastCrankEventTime?.ToString() ?? "none";
+        //    return $"WheelRev={wR}, LastWheelEventTime={lW} ms, CrankRev={cR}, LastCrankEventTime={lC} ms";
+        //}
     }
 }

@@ -1,4 +1,5 @@
 ﻿using BleLibrary.Abstractions;
+using BleLibrary.Domain;
 using BleLibrary.Exceptions;
 using BleLibrary.Parsers;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,8 @@ namespace BleLibrary.Services
         private readonly HashSet<Guid> _seenDevices = [];
         private IDevice? _connected;
         private ICharacteristic? _ftmsControlPoint;
+
+        private readonly CscCalculator _cscCalc = new CscCalculator();
 
         private volatile bool _isScanning;
         private const int MinRssi = -85;
@@ -56,7 +59,8 @@ namespace BleLibrary.Services
             _parsers = [
                 new HeartRateParser(),
                 new CyclingPowerParser(),
-                new FtmsIndoorBikeDataParser()
+                new FtmsIndoorBikeDataParser(),
+                new CadenceSensorParser()
             ];
         }
 
@@ -237,6 +241,11 @@ namespace BleLibrary.Services
                     return;
                 }
 
+                if (e.Device.AdvertisementRecords?.Any(r => r.Type == AdvertisementRecordType.UuidsComplete16Bit) != true)
+                {
+                    return;
+                }
+
                 var id = ToIdentifier(e.Device);
                 if (!_seenDevices.Add(id.Id))
                 {
@@ -368,6 +377,13 @@ namespace BleLibrary.Services
                     await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
                 }
 
+                // CSC: Cycling Power Measurement
+                var cs = characteristics.FirstOrDefault(c => c.Id == Uuids.Csc_CadenceMeasurement);
+                if (cs != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, cs, ct);
+                }
+
                 // CPS: Cycling Power Measurement
                 var cp = characteristics.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
                 if (cp != null)
@@ -393,11 +409,24 @@ namespace BleLibrary.Services
                         if (parser.TryParse(payload, out var parsed) && parsed is not null)
                         {
                             var id = ToIdentifier(device);
-                            _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
-                                " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
-                                " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
-                                serviceId, ch.Id, parsed);
-                            DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, parsed));
+
+                            if (parsed is CadenceSensorData cscData)
+                            {
+                                var metrics = _cscCalc.Update(id.Id, cscData);
+                                _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
+                                    " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
+                                    " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
+                                    serviceId, ch.Id, metrics);
+                                DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, metrics));
+                            }
+                            else
+                            {
+                                _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
+                                    " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
+                                    " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
+                                    serviceId, ch.Id, parsed);
+                                DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, parsed));
+                            }
                             break; // first match wins
                         }
                     }
