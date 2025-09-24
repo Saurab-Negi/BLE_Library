@@ -10,4 +10,12 @@
         OutOfRange, // RSSI degraded / consecutive read failures
         BatteryLow
     }
+
+    public enum DeviceType
+    {
+        HeartRateMonitor,
+        PowerMeter,
+        SpeedCadenceSensor,
+        FitnessMachine
+    }
 }

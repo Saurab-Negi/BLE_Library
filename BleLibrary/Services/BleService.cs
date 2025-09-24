@@ -39,6 +39,12 @@ namespace BleLibrary.Services
         private const int ScanWindowMs = 3_000; // brief scan between attempts to refresh cache
         private volatile bool _autoReconnectEnabled = true;
 
+        private readonly ConcurrentQueue<IDevice> _discoveryQueue = new();
+        private readonly SemaphoreSlim _queueLock = new(1, 1);
+        private volatile bool _processingQueue;
+
+        private readonly Guid[] _targetServices = new[] { Uuids.Ftms, Uuids.Hrs, Uuids.Cps, Uuids.Csc };
+
         public event EventHandler<DeviceFoundEventArgs>? DeviceFound;
         public event EventHandler<DeviceConnectionEventArgs>? ConnectionStateChanged;
         public event EventHandler<DeviceDataReceivedEventArgs>? DataReceived;
@@ -243,10 +249,10 @@ namespace BleLibrary.Services
                     return;
                 }
 
-                if (e.Device.AdvertisementRecords?.Any(r => r.Type == AdvertisementRecordType.UuidsComplete16Bit) != true)
-                {
-                    return;
-                }
+                //if (e.Device.AdvertisementRecords?.Any(r => r.Type == AdvertisementRecordType.UuidsComplete16Bit) != true)
+                //{
+                //    return;
+                //}
 
                 var id = ToIdentifier(e.Device);
                 if (!_seenDevices.Add(id.Id))
@@ -256,13 +262,57 @@ namespace BleLibrary.Services
 
                 _lastSeen[e.Device.Id] = DateTimeOffset.UtcNow;
                 _deviceCache[id.Id] = e.Device;
-                DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
+
+                _discoveryQueue.Enqueue(e.Device);
+                _ = ProcessDiscoveryQueueAsync(); // fire-and-forget
+
+                //DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
                     " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in OnDeviceDiscovered");
+            }
+        }
+
+        private async Task ProcessDiscoveryQueueAsync()
+        {
+            if (_processingQueue) return; // already running
+            _processingQueue = true;
+
+            try
+            {
+                while (_discoveryQueue.TryDequeue(out var device))
+                {
+                    try
+                    {
+                        // Quick connect & discover services
+                        using var cts = new CancellationTokenSource(ConnectTimeoutMs);
+
+                        await _adapter.ConnectToDeviceAsync(device, cancellationToken: cts.Token);
+                        var services = await device.GetServicesAsync(cts.Token);
+
+                        if (services.Any(s => _targetServices.Contains(s.Id)))
+                        {
+                            var id = ToIdentifier(device);
+                            DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
+
+                            _logger.LogInformation("Qualified device found: {Name}, Services: {Services}",
+                                id.Name, string.Join(",", services.Select(s => s.Id)));
+                        }
+
+                        await _adapter.DisconnectDeviceAsync(device);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Skipping device {Name}", device?.Name);
+                    }
+                }
+            }
+            finally
+            {
+                _processingQueue = false;
             }
         }
 
@@ -277,7 +327,7 @@ namespace BleLibrary.Services
                 var id = ToIdentifier(e.Device);
                 _logger.LogInformation("Device connected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
                     " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
-                RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
+                //RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
             }
             catch (Exception ex)
             {
@@ -299,7 +349,7 @@ namespace BleLibrary.Services
                 _logger.LogInformation("Device disconnected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
                     " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
                     id.AdvertisementRecords);
-                RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
+                //RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
             }
             catch (Exception ex)
             {
