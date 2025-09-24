@@ -60,6 +60,8 @@ namespace BleLibrary.Services
                 new HeartRateParser(),
                 new CyclingPowerParser(),
                 new FtmsIndoorBikeDataParser(),
+                new TreadmillDataParser(),
+                new RowerDataParser(),
                 new CadenceSensorParser()
             ];
         }
@@ -361,6 +363,20 @@ namespace BleLibrary.Services
                 if (ftmsData != null)
                 {
                     await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
+                }
+
+                // FTMS: Treadmill Data
+                var tm = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_TreadmillData);
+                if (tm != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, tm, ct);
+                }
+
+                // FTMS: Rower Data
+                var rd = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_RowerData);
+                if (rd != null)
+                {
+                    await SubscribeCharacteristicAsync(device, svc.Id, rd, ct);
                 }
 
                 // FTMS: Control Point

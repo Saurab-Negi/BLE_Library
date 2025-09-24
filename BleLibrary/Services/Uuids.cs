@@ -11,6 +11,8 @@
 
         // Characteristics
         public static readonly Guid Ftms_IndoorBikeData = Guid.Parse("00002ad2-0000-1000-8000-00805f9b34fb");
+        public static readonly Guid Ftms_TreadmillData = Guid.Parse("00002acd-0000-1000-8000-00805f9b34fb");
+        public static readonly Guid Ftms_RowerData = Guid.Parse("00002ad1-0000-1000-8000-00805f9b34fb");
         public static readonly Guid Ftms_FitnessMachineCtrlPoint = Guid.Parse("00002ad9-0000-1000-8000-00805f9b34fb");
         public static readonly Guid Csc_CadenceMeasurement = Guid.Parse("00002a5b-0000-1000-8000-00805f9b34fb");
         public static readonly Guid Hrs_HeartRateMeasurement = Guid.Parse("00002a37-0000-1000-8000-00805f9b34fb");

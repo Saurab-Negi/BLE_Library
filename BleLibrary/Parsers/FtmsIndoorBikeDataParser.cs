@@ -39,6 +39,8 @@ namespace BleLibrary.Parsers
 
             // Flags: 2 bytes little-endian
             ushort flags = (ushort)(payload[0] | (payload[1] << 8));
+            Console.WriteLine($"IndoorBike payload={Convert.ToHexString(payload.ToArray())}");
+
             int i = 2;
 
             float? speedKmph = null;

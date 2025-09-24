@@ -23,6 +23,7 @@ namespace BleLibrary.Parsers
             }
             int i = 0;
             byte flags = payload[i++];
+            Console.WriteLine($"HeartRateData payload={Convert.ToHexString(payload.ToArray())}");
 
             // --- Heart Rate ---
             bool hr16 = (flags & FLAG_HR_16BIT) != 0;
