@@ -44,6 +44,8 @@ namespace BleLibrary.Services
         private readonly SemaphoreSlim _verificationLock = new(1, 1);
         private volatile bool _verificationRunning;
 
+        private readonly ConcurrentDictionary<Guid, DeviceType> _deviceTypes = new();
+
         public event EventHandler<DeviceFoundEventArgs>? DeviceFound;
         public event EventHandler<DeviceConnectionEventArgs>? ConnectionStateChanged;
         public event EventHandler<DeviceDataReceivedEventArgs>? DataReceived;
@@ -267,7 +269,8 @@ namespace BleLibrary.Services
 
                 //DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
-                    " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
+                    " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords, id.Type);
             }
             catch (Exception ex)
             {
@@ -285,7 +288,8 @@ namespace BleLibrary.Services
                 }
                 var id = ToIdentifier(e.Device);
                 _logger.LogInformation("Device connected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
-                    " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
+                    " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords, id.Type);
                 //RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
             }
             catch (Exception ex)
@@ -305,9 +309,9 @@ namespace BleLibrary.Services
                 var id = ToIdentifier(e.Device);
                 _connected = null;
                 _ftmsControlPoint = null;
-                _logger.LogInformation("Device disconnected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
-                    " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
-                    id.AdvertisementRecords);
+                _logger.LogInformation("Device disconnected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
+                    " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords, id.Type);
                 //RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
             }
             catch (Exception ex)
@@ -326,9 +330,9 @@ namespace BleLibrary.Services
                 _connected = null;
                 _ftmsControlPoint = null;
 
-                _logger.LogWarning("Device connection lost: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
-                    " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
-                    id.AdvertisementRecords);
+                _logger.LogInformation("Device connection lost: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
+                    " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                    id.AdvertisementRecords, id.Type);
 
                 // Declare why we think it was lost
                 var last = _lastSeen.TryGetValue(id.Id, out var ts) ? ts : DateTimeOffset.MinValue;
@@ -439,17 +443,17 @@ namespace BleLibrary.Services
                             {
                                 var metrics = _cscCalc.Update(id.Id, cscData);
                                 _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
-                                    " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
-                                    " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
-                                    serviceId, ch.Id, metrics);
+                                    " Address: {Address}, Advertisement {Advertisement}, Type {Type}, Service: {Service}," +
+                                    " Char: {Char}, Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, 
+                                    id.AdvertisementRecords, id.Type, serviceId, ch.Id, metrics);
                                 DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, metrics));
                             }
                             else
                             {
                                 _logger.LogInformation("DataReceived: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
-                                    " Address: {Address}, Advertisement {Advertisement}, Service: {Service}, Char: {Char}," +
-                                    " Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords,
-                                    serviceId, ch.Id, parsed);
+                                    " Address: {Address}, Advertisement {Advertisement}, Type {Type}, Service: {Service}," +
+                                    " Char: {Char}, Parsed: {Parsed}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
+                                    id.AdvertisementRecords, id.Type, serviceId, ch.Id, parsed);
                                 DataReceived?.Invoke(this, new DeviceDataReceivedEventArgs(id, parsed));
                             }
                             break; // first match wins
@@ -487,9 +491,10 @@ namespace BleLibrary.Services
             ConnectionStateChanged?.Invoke(this, new DeviceConnectionEventArgs(device, status, msg, ex));
         }
 
-        private static DeviceIdentifier ToIdentifier(IDevice d)
+        private DeviceIdentifier ToIdentifier(IDevice d)
         {
-            return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State, d.AdvertisementRecords);
+            var type = _deviceTypes.TryGetValue(d.Id, out var t) ? t : DeviceType.Unknown;
+            return new(d.Id, d.Name ?? "unknown", d.Rssi, d.NativeDevice, d.State, d.AdvertisementRecords, type);
         }
 
         private async Task StartAutoReconnect(DeviceIdentifier deviceId, CancellationToken ct)
@@ -633,16 +638,23 @@ namespace BleLibrary.Services
                     new ConnectParameters(autoConnect: false, forceBleTransport: true),
                     cts.Token);
 
-                var services = await device.GetServicesAsync(cts.Token);
-                bool isRelevant = services.Any(s =>
+                    var services = await device.GetServicesAsync(cts.Token);
+                    foreach (var svc in services)
+                    {
+                        _logger.LogInformation($"Service UUID: {svc.Id}");
+                    }
+                    bool isRelevant = services.Any(s =>
                     s.Id == Uuids.Ftms || s.Id == Uuids.Hrs || s.Id == Uuids.Cps || s.Id == Uuids.Csc);
+
+                var devType = MapDeviceType(services);
+                _deviceTypes[device.Id] = devType;
 
                 if (isRelevant)
                 {
                     var id = ToIdentifier(device);
-                    _logger.LogInformation("Device Name: {Name} supports FTMS/HRS/CPS/CSC", id.Name);
+                    _logger.LogInformation("Fitness Device: {Name}, Type: {Type}", id.Name, id.Type);
                     DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
-                }
+                  }
             }
             catch (Exception ex)
             {
@@ -652,6 +664,15 @@ namespace BleLibrary.Services
             {
                 try { await _adapter.DisconnectDeviceAsync(device); } catch { }
             }
+        }
+
+        private static DeviceType MapDeviceType(IEnumerable<IService> services)
+        {
+            if (services.Any(s => s.Id == Uuids.Hrs)) return DeviceType.HeartRateMonitor;
+            if (services.Any(s => s.Id == Uuids.Csc)) return DeviceType.SpeedCadenceSensor;
+            if (services.Any(s => s.Id == Uuids.Cps)) return DeviceType.PowerMeter;
+            if (services.Any(s => s.Id == Uuids.Ftms)) return DeviceType.FitnessMachine;
+            return DeviceType.Unknown;
         }
 
         public void Dispose()

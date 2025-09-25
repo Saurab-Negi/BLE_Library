@@ -12,6 +12,7 @@
     }
     public enum DeviceType
     {
+        Unknown,
         HeartRateMonitor,
         PowerMeter,
         SpeedCadenceSensor,
