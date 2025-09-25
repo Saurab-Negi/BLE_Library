@@ -68,7 +68,7 @@ namespace BleApp
                 Debug.WriteLine("==== BLE SCAN START ====");
 
                 try { await _ble.StartScanForDevicesAsync(_cts.Token); } catch (OperationCanceledException) { }
-                await Task.Delay(10_000, _cts.Token);
+                await Task.Delay(5_000, _cts.Token);
                 await _ble.StopScanForDevicesAsync();
                 OnPropertyChanged(nameof(DeviceCountText));
 

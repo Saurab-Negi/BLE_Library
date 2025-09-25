@@ -39,6 +39,11 @@ namespace BleLibrary.Services
         private const int ScanWindowMs = 3_000; // brief scan between attempts to refresh cache
         private volatile bool _autoReconnectEnabled = true;
 
+        private readonly ConcurrentQueue<IDevice> _verificationQueue = new();
+        private Task? _verificationWorker;
+        private readonly SemaphoreSlim _verificationLock = new(1, 1);
+        private volatile bool _verificationRunning;
+
         public event EventHandler<DeviceFoundEventArgs>? DeviceFound;
         public event EventHandler<DeviceConnectionEventArgs>? ConnectionStateChanged;
         public event EventHandler<DeviceDataReceivedEventArgs>? DataReceived;
@@ -91,7 +96,6 @@ namespace BleLibrary.Services
 
                 await _adapter.StartScanningForDevicesAsync(
                     serviceUuids: null, // set serviceUuids: null if you want to see anything nearby
-                    deviceFilter: null,
                     cancellationToken: ct);
             }
             catch (Exception ex)
@@ -243,10 +247,10 @@ namespace BleLibrary.Services
                     return;
                 }
 
-                if (e.Device.AdvertisementRecords?.Any(r => r.Type == AdvertisementRecordType.UuidsComplete16Bit) != true)
-                {
-                    return;
-                }
+                //if (e.Device.AdvertisementRecords?.Any(r => r.Type == AdvertisementRecordType.UuidsComplete16Bit) != true)
+                //{
+                //    return;
+                //}
 
                 var id = ToIdentifier(e.Device);
                 if (!_seenDevices.Add(id.Id))
@@ -256,7 +260,12 @@ namespace BleLibrary.Services
 
                 _lastSeen[e.Device.Id] = DateTimeOffset.UtcNow;
                 _deviceCache[id.Id] = e.Device;
-                DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
+
+                // enqueue for validation
+                _verificationQueue.Enqueue(e.Device);
+                StartDeviceVerification();
+
+                //DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
                     " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
             }
@@ -277,7 +286,7 @@ namespace BleLibrary.Services
                 var id = ToIdentifier(e.Device);
                 _logger.LogInformation("Device connected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
                     " Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice, id.AdvertisementRecords);
-                RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
+                //RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
             }
             catch (Exception ex)
             {
@@ -299,7 +308,7 @@ namespace BleLibrary.Services
                 _logger.LogInformation("Device disconnected: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}," +
                     " Address: {Address}, Advertisement {Advertisement}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
                     id.AdvertisementRecords);
-                RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
+                //RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
             }
             catch (Exception ex)
             {
@@ -561,7 +570,6 @@ namespace BleLibrary.Services
 
                 await _adapter.StartScanningForDevicesAsync(
                     serviceUuids: null,
-                    deviceFilter: null,
                     cancellationToken: scanCts.Token);
             }
             catch (OperationCanceledException)
@@ -598,6 +606,52 @@ namespace BleLibrary.Services
                 deviceId,
                 new ConnectParameters(autoConnect: false, forceBleTransport: true),
                 linked.Token);
+        }
+
+        private void StartDeviceVerification()
+        {
+            if (_verificationRunning) return;
+
+            _verificationRunning = true;
+            _verificationWorker = Task.Run(async () =>
+            {
+                while (_verificationQueue.TryDequeue(out var device))
+                {
+                    await VerifyDeviceAsync(device);
+                }
+                _verificationRunning = false;
+            });
+        }
+
+        private async Task VerifyDeviceAsync(IDevice device)
+        {
+            using var cts = new CancellationTokenSource(3000); // 3s timeout
+            try
+            {
+                await _adapter.ConnectToDeviceAsync(
+                    device,
+                    new ConnectParameters(autoConnect: false, forceBleTransport: true),
+                    cts.Token);
+
+                var services = await device.GetServicesAsync(cts.Token);
+                bool isRelevant = services.Any(s =>
+                    s.Id == Uuids.Ftms || s.Id == Uuids.Hrs || s.Id == Uuids.Cps || s.Id == Uuids.Csc);
+
+                if (isRelevant)
+                {
+                    var id = ToIdentifier(device);
+                    _logger.LogInformation("Device Name: {Name} supports FTMS/HRS/CPS/CSC", id.Name);
+                    DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Verification failed for {Name}", device.Name);
+            }
+            finally
+            {
+                try { await _adapter.DisconnectDeviceAsync(device); } catch { }
+            }
         }
 
         public void Dispose()
