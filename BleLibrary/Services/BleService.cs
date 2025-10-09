@@ -9,6 +9,7 @@ using Plugin.BLE.Abstractions.Contracts;
 using Plugin.BLE.Abstractions.EventArgs;
 using Plugin.BLE.Abstractions.Exceptions;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace BleLibrary.Services
 {
@@ -46,6 +47,9 @@ namespace BleLibrary.Services
 
         private readonly ConcurrentDictionary<Guid, DeviceType> _deviceTypes = new();
 
+        private readonly string _cachePath;
+        private readonly ConcurrentDictionary<Guid, DeviceType> _verifiedDevices = new();
+
         public event EventHandler<DeviceFoundEventArgs>? DeviceFound;
         public event EventHandler<DeviceConnectionEventArgs>? ConnectionStateChanged;
         public event EventHandler<DeviceDataReceivedEventArgs>? DataReceived;
@@ -71,6 +75,10 @@ namespace BleLibrary.Services
                 new RowerDataParser(),
                 new CadenceSensorParser()
             ];
+
+            var localDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            _cachePath = Path.Combine(localDir, "ble_verified_devices.json");
+            LoadVerifiedDevices();
         }
 
         public async Task StartScanForDevicesAsync(CancellationToken ct = default)
@@ -99,6 +107,8 @@ namespace BleLibrary.Services
                 await _adapter.StartScanningForDevicesAsync(
                     serviceUuids: null, // set serviceUuids: null if you want to see anything nearby
                     cancellationToken: ct);
+
+                StartDeviceVerification();
             }
             catch (Exception ex)
             {
@@ -263,9 +273,19 @@ namespace BleLibrary.Services
                 _lastSeen[e.Device.Id] = DateTimeOffset.UtcNow;
                 _deviceCache[id.Id] = e.Device;
 
+                if (_verifiedDevices.TryGetValue(e.Device.Id, out var cachedType) && cachedType != DeviceType.Unknown)
+                {
+                    _deviceTypes[e.Device.Id] = cachedType;
+                    var cachedId = ToIdentifier(e.Device);
+                    _logger.LogInformation("Device in cache found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
+                    " Advertisement {Advertisement} Type {Type}", cachedId.Name, cachedId.Id, cachedId.Rssi, cachedId.State, cachedId.NativeDevice,
+                    cachedId.AdvertisementRecords, cachedId.Type);
+                    DeviceFound?.Invoke(this, new DeviceFoundEventArgs(cachedId));
+                    return; // skip verification queue
+                }
+
                 // enqueue for validation
                 _verificationQueue.Enqueue(e.Device);
-                StartDeviceVerification();
 
                 //DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 _logger.LogInformation("Device found: Name: {Name}, Id: {Id}, RSSI: {Rssi}, State: {State}, Address: {Address}," +
@@ -651,6 +671,9 @@ namespace BleLibrary.Services
 
                 if (isRelevant)
                 {
+                    _verifiedDevices[device.Id] = devType == DeviceType.Unknown ? DeviceType.FitnessMachine : devType;
+                    SaveVerifiedDevices();
+
                     var id = ToIdentifier(device);
                     _logger.LogInformation("Fitness Device: {Name}, Type: {Type}", id.Name, id.Type);
                     DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
@@ -673,6 +696,60 @@ namespace BleLibrary.Services
             if (services.Any(s => s.Id == Uuids.Cps)) return DeviceType.PowerMeter;
             if (services.Any(s => s.Id == Uuids.Ftms)) return DeviceType.FitnessMachine;
             return DeviceType.Unknown;
+        }
+
+        private sealed class CacheDto
+        {
+            public Dictionary<string, int> Items { get; set; } = new();
+        }
+
+        private void LoadVerifiedDevices()
+        {
+            try
+            {
+                if (!File.Exists(_cachePath)) return;
+
+                var json = File.ReadAllText(_cachePath);
+                var dto = JsonSerializer.Deserialize<CacheDto>(json);
+                if (dto is null || dto.Items.Count == 0) return;
+
+                foreach (var kv in dto.Items)
+                {
+                    if (Guid.TryParse(kv.Key, out var id))
+                    {
+                        var type = Enum.IsDefined(typeof(DeviceType), kv.Value) ? (DeviceType)kv.Value : DeviceType.Unknown;
+                        _verifiedDevices[id] = type;
+                        _deviceTypes[id] = type; // also prime runtime map
+                    }
+                }
+
+                _logger.LogInformation("Loaded devices from cache: {_verifiedDevices}", _verifiedDevices);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load device from cache.");
+            }
+        }
+
+        private void SaveVerifiedDevices()
+        {
+            try
+            {
+                var dto = new CacheDto
+                {
+                    Items = _verifiedDevices.ToDictionary(k => k.Key.ToString(), v => (int)v.Value)
+                };
+
+                var json = JsonSerializer.Serialize(dto);
+                Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
+                File.WriteAllText(_cachePath, json);
+
+                _logger.LogInformation("Saved device in cache: {_verifiedDevices}.", _verifiedDevices);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to save device in cache.");
+            }
         }
 
         public void Dispose()
