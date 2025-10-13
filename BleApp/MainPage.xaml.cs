@@ -3,6 +3,7 @@ using Plugin.BLE;
 using Plugin.BLE.Abstractions;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace BleApp
 {
@@ -24,6 +25,30 @@ namespace BleApp
         // Static GUID from your scan log:
         private static readonly Guid TestGuid = Guid.Parse("00000000-0000-0000-0000-f44b1c881a39");
 
+        // --- Live data buffer
+        private readonly Queue<string> _liveLines = new();
+        private const int _maxLines = 150;
+        private string _latestRawText = string.Empty;
+
+        public string LatestRawText
+        {
+            get => _latestRawText;
+            private set
+            {
+                if (_latestRawText == value) return;
+                _latestRawText = value;
+                OnPropertyChanged(nameof(LatestRawText));
+            }
+        }
+
+        private void AppendLive(string block)
+        {
+            _liveLines.Enqueue(block);
+            while (_liveLines.Count > _maxLines)
+                _liveLines.Dequeue();
+
+            LatestRawText = string.Join(Environment.NewLine, _liveLines);
+        }
 
         public MainPage(IBleService ble)
         {
@@ -39,6 +64,7 @@ namespace BleApp
             {
                 _ble.DeviceFound += OnDeviceFound;
                 _ble.ConnectionStateChanged += OnConnectionStateChanged; // optional UI feedback
+                _ble.DataReceived += OnDataReceived;
                 _subscribed = true;
             }
         }
@@ -50,6 +76,7 @@ namespace BleApp
             {
                 _ble.DeviceFound -= OnDeviceFound;
                 _ble.ConnectionStateChanged -= OnConnectionStateChanged;
+                _ble.DataReceived -= OnDataReceived;
                 _subscribed = false;
             }
         }
@@ -192,6 +219,25 @@ namespace BleApp
                 }
             });
         }
+
+        // --- NEW: render raw feed lines into the box ---
+        private void OnDataReceived(object? sender, DeviceDataReceivedEventArgs e)
+        {
+            var id = e.Device;
+
+            // Build a multiline text block for this packet
+            var sb = new StringBuilder();
+            sb.AppendLine($"Name: {id.Name}");
+            sb.AppendLine($"Id: {id.Id}");
+            sb.AppendLine($"RSSI: {id.Rssi}");
+            sb.AppendLine($"State: {id.State}");
+            sb.AppendLine($"Address: {id.NativeDevice}");
+            sb.AppendLine($"Type: {id.Type}");
+            sb.AppendLine($"Data: {e.Data}");
+
+            MainThread.BeginInvokeOnMainThread(() => AppendLive(sb.ToString()));
+        }
+
 
         private void ClearDevices()
         {

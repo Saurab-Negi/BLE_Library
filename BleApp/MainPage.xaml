@@ -4,7 +4,22 @@
              x:Class="BleApp.MainPage"
              Title="BLE Scanner">
 
-    <Grid Padding="24" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+    <VerticalStackLayout Padding="12" Spacing="12">
+        <Frame Padding="6"
+         BackgroundColor="{DynamicResource SecondaryTextColor}"
+         CornerRadius="10">
+            <Grid RowDefinitions="Auto,*" ColumnDefinitions="*">
+                <Label Text="Data Recieved:"
+             FontAttributes="Bold"
+             FontSize="16"
+             Margin="0,0,0,8" />
+                <ScrollView Grid.Row="1" HeightRequest="150">
+                    <Label Text="{Binding LatestRawText}"
+               LineBreakMode="WordWrap" />
+                </ScrollView>
+            </Grid>
+        </Frame>
+        
         <!-- Row 0: Scan button -->
         <Button Grid.Row="0"
             Text="Scan Nearby Devices"
@@ -38,6 +53,6 @@
                 </DataTemplate>
             </CollectionView.ItemTemplate>
         </CollectionView>
-    </Grid>
+    </VerticalStackLayout>
 
 </ContentPage>
