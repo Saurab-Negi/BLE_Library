@@ -41,6 +41,12 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="bluetooth">
+      <Device Id="any">
+        <Function Type="name:genericAccess" />
+        <Function Type="name:genericAttribute" />
+      </Device>
+    </DeviceCapability>
   </Capabilities>
 
 </Package>

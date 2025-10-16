@@ -8,6 +8,7 @@ using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
 using Plugin.BLE.Abstractions.EventArgs;
 using Plugin.BLE.Abstractions.Exceptions;
+using Plugin.BLE.Abstractions.Extensions;
 using System.Collections.Concurrent;
 using System.Text.Json;
 
@@ -86,7 +87,6 @@ namespace BleLibrary.Services
             if (!_ble.IsAvailable || !_ble.IsOn)
             {
                 _logger.LogInformation("Bluetooth unavailable or powered off.");
-                RaiseConnectionEvent(null, ConnectionStatus.PermissionDenied, "Bluetooth unavailable or powered off.");
                 return;
             }
 
@@ -98,15 +98,23 @@ namespace BleLibrary.Services
             _seenDevices.Clear();
             _isScanning = true;
 
+            using (var cts = ct == default ? new CancellationTokenSource(TimeSpan.FromSeconds(15)) : null)
             try
             {
+                var ctoken = cts?.Token ?? ct;
                 // Filter by target services
-                var targetServices = new[] { Uuids.Ftms, Uuids.Hrs, Uuids.Cps };
-                _logger.LogInformation("Starting BLE scan filtered by FTMS/HRS/CPS");
-
-                await _adapter.StartScanningForDevicesAsync(
-                    serviceUuids: null, // set serviceUuids: null if you want to see anything nearby
-                    cancellationToken: ct);
+                var targetServices = new[] { Uuids.Ftms, Uuids.Hrs, Uuids.Cps, Uuids.Csc };
+                
+                if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+                {
+                    _logger.LogInformation("Starting BLE scan for windows");
+                    await _adapter.StartScanningForDevicesAsync(ctoken);
+                }
+                else
+                {
+                    _logger.LogInformation("Starting BLE scan for others");
+                    await _adapter.StartScanningForDevicesAsync(serviceUuids: targetServices, ctoken);
+                }
 
                 StartDeviceVerification();
             }
@@ -148,14 +156,16 @@ namespace BleLibrary.Services
                 _logger.LogWarning("Device not in cache. Scan first.");
                 return false;
             }
+            using (var cts = ct == default ? new CancellationTokenSource(TimeSpan.FromSeconds(10)) : null)
 
             // Retry with backoff
             try
             {
+                var ctoken = cts?.Token ?? ct;
                 _logger.LogInformation("Connection Initiated");
                 bool success = await WithRetries(async () =>
                 {
-                    await ConnectKnownWithTimeoutAsync(device.Id, ct);
+                    await ConnectKnownWithTimeoutAsync(device.Id, ctoken);
 
                     return device.State == Plugin.BLE.Abstractions.DeviceState.Connected;
                 }, attempts: 3);
@@ -372,7 +382,7 @@ namespace BleLibrary.Services
             }
         }
 
-        private async Task DiscoverAndSubscribeAsync(IDevice device, CancellationToken ct)
+        private async Task DiscoverAndSubscribeAsync(IDevice device, CancellationToken ct = default)
         {
             var services = await device.GetServicesAsync(ct);
             foreach (var svc in services)
@@ -586,16 +596,15 @@ namespace BleLibrary.Services
         private async Task BriefScanAsync(TimeSpan window, CancellationToken ct)
         {
             if (_isScanning) return;
-
+            using (var cts = ct == default ? new CancellationTokenSource(TimeSpan.FromSeconds(10)) : null)
             try
             {
                 _isScanning = true;
-                using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var ctoken = cts?.Token ?? ct;
+                using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(ctoken);
                 scanCts.CancelAfter(window);
 
-                await _adapter.StartScanningForDevicesAsync(
-                    serviceUuids: null,
-                    cancellationToken: scanCts.Token);
+                await _adapter.StartScanningForDevicesAsync(scanCts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -638,6 +647,7 @@ namespace BleLibrary.Services
             if (_verificationRunning) return;
 
             _verificationRunning = true;
+            _logger.LogInformation($"StartDeviceVerification started");
             _verificationWorker = Task.Run(async () =>
             {
                 while (_verificationQueue.TryDequeue(out var device))
@@ -650,21 +660,29 @@ namespace BleLibrary.Services
 
         private async Task VerifyDeviceAsync(IDevice device)
         {
-            using var cts = new CancellationTokenSource(3000); // 3s timeout
             try
             {
+                using var cts = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+                    ? new CancellationTokenSource(TimeSpan.FromSeconds(15))
+                    : new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+                var connectParams = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+                    ? new ConnectParameters(autoConnect: false, forceBleTransport: false)
+                    : new ConnectParameters(autoConnect: false, forceBleTransport: true);
+
+                _logger.LogInformation($"VerifyDeviceAsync started {device}");
                 await _adapter.ConnectToDeviceAsync(
                     device,
-                    new ConnectParameters(autoConnect: false, forceBleTransport: true),
+                    connectParams,
                     cts.Token);
 
-                    var services = await device.GetServicesAsync(cts.Token);
-                    foreach (var svc in services)
-                    {
-                        _logger.LogInformation($"Service UUID: {svc.Id}");
-                    }
-                    bool isRelevant = services.Any(s =>
-                    s.Id == Uuids.Ftms || s.Id == Uuids.Hrs || s.Id == Uuids.Cps || s.Id == Uuids.Csc);
+                var services = await device.GetServicesAsync(cts.Token);
+                foreach (var svc in services)
+                {
+                    _logger.LogInformation($"Service UUID: {svc.Id}");
+                }
+                bool isRelevant = services.Any(s =>
+                s.Id == Uuids.Ftms || s.Id == Uuids.Hrs || s.Id == Uuids.Cps || s.Id == Uuids.Csc);
 
                 var devType = MapDeviceType(services);
                 _deviceTypes[device.Id] = devType;
@@ -677,7 +695,7 @@ namespace BleLibrary.Services
                     var id = ToIdentifier(device);
                     _logger.LogInformation("Fitness Device: {Name}, Type: {Type}", id.Name, id.Type);
                     DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
-                  }
+                }
             }
             catch (Exception ex)
             {
@@ -719,7 +737,7 @@ namespace BleLibrary.Services
                     {
                         var type = Enum.IsDefined(typeof(DeviceType), kv.Value) ? (DeviceType)kv.Value : DeviceType.Unknown;
                         _verifiedDevices[id] = type;
-                        _deviceTypes[id] = type; // also prime runtime map
+                        _deviceTypes[id] = type;
                     }
                 }
 

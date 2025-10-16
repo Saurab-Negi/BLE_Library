@@ -11,7 +11,6 @@ namespace BleApp
     {
         private readonly IBleService _ble;
         private bool _subscribed;
-        private CancellationTokenSource? _cts;
 
         private bool _connecting;
 
@@ -22,11 +21,9 @@ namespace BleApp
             ? "Found 0 devices"
             : $"Found {Devices.Count} device(s)";
 
-        // Static GUID from your scan log:
-        private static readonly Guid TestGuid = Guid.Parse("00000000-0000-0000-0000-f44b1c881a39");
 
         // --- Live data buffer
-        private readonly Queue<string> _liveLines = new();
+        private readonly List<string> _liveLines = new();
         private const int _maxLines = 150;
         private string _latestRawText = string.Empty;
 
@@ -43,9 +40,9 @@ namespace BleApp
 
         private void AppendLive(string block)
         {
-            _liveLines.Enqueue(block);
-            while (_liveLines.Count > _maxLines)
-                _liveLines.Dequeue();
+            _liveLines.Insert(0, block);
+            if (_liveLines.Count > _maxLines)
+                _liveLines.RemoveAt(_liveLines.Count - 1);
 
             LatestRawText = string.Join(Environment.NewLine, _liveLines);
         }
@@ -88,18 +85,24 @@ namespace BleApp
                 Debug.WriteLine("==== Requesting permissions ====");
                 await EnsureBluetoothPermissions();
 
-                _cts?.Cancel();
-                _cts = new CancellationTokenSource();
                 ClearDevices();
+                DateTime currentDateTime1 = DateTime.Now;
+                Debug.WriteLine($"==== BLE SCAN START ==== {currentDateTime1}");
 
-                Debug.WriteLine("==== BLE SCAN START ====");
+                try 
+                { 
+                    await _ble.StartScanForDevicesAsync(); 
+                } 
+                catch (OperationCanceledException) 
+                { 
+                    Debug.WriteLine("Scan was cancelled by user");
+                }
+                DateTime currentDateTime2 = DateTime.Now;
 
-                try { await _ble.StartScanForDevicesAsync(_cts.Token); } catch (OperationCanceledException) { }
-                await Task.Delay(5_000, _cts.Token);
                 await _ble.StopScanForDevicesAsync();
                 OnPropertyChanged(nameof(DeviceCountText));
 
-                Debug.WriteLine($"==== BLE SCAN DONE. ====");
+                Debug.WriteLine($"==== BLE SCAN DONE. ==== {currentDateTime2}");
             }
             catch (OperationCanceledException)
             {
@@ -109,26 +112,6 @@ namespace BleApp
             {
                 Debug.WriteLine($"====SCAN ERROR: {ex} ====");
             }
-        }
-
-        private async void OnConnectClicked(object sender, EventArgs e)
-        {
-            await _ble.StopScanForDevicesAsync();
-
-            _cts?.Cancel();
-            _cts = new CancellationTokenSource();
-
-
-            Debug.WriteLine("==== BLE CONNECT START ====");
-
-            var adapter = CrossBluetoothLE.Current.Adapter;
-
-            // Always pass a CancellationToken
-            var device = await adapter.ConnectToKnownDeviceAsync(TestGuid, cancellationToken: _cts.Token);
-
-            Debug.WriteLine($"==== Connected to {device?.Name} ({device?.Id}) ====");
-
-            Debug.WriteLine($"==== BLE CONNECT DONE. ====");
         }
 
         private void OnDeviceFound(object? sender, DeviceFoundEventArgs e)
