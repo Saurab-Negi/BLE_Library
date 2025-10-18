@@ -38,6 +38,7 @@ namespace BleLibrary.Services
         private CancellationTokenSource? _reconnectCts;
         private const int OutOfRangeGraceMs = 10_000; // last seen > 10s → likely out of range
         private const int ConnectTimeoutMs = 7_000; // iOS needs our own timeout
+        private const int WindowsConnectTimeoutMs = 15_000;
         private const int ScanWindowMs = 3_000; // brief scan between attempts to refresh cache
         private volatile bool _autoReconnectEnabled = true;
 
@@ -118,6 +119,10 @@ namespace BleLibrary.Services
 
                 StartDeviceVerification();
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"StartScanForDevicesAsync TaskCanceledException {ex}");
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in StartScanForDevicesAsync");
@@ -136,6 +141,10 @@ namespace BleLibrary.Services
             try
             {
                 await _adapter.StopScanningForDevicesAsync();
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"StopScanForDevicesAsync TaskCanceledException {ex}");
             }
             catch (Exception ex)
             {
@@ -224,6 +233,10 @@ namespace BleLibrary.Services
                     await _adapter.DisconnectDeviceAsync(_connected);
                 }
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"DisconnectDeviceAsync TaskCanceledException {ex}");
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in DisconnectDeviceAsync");
@@ -302,6 +315,10 @@ namespace BleLibrary.Services
                     " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
                     id.AdvertisementRecords, id.Type);
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"OnDeviceDiscovered TaskCanceledException {ex}");
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in OnDeviceDiscovered");
@@ -321,6 +338,10 @@ namespace BleLibrary.Services
                     " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
                     id.AdvertisementRecords, id.Type);
                 //RaiseConnectionEvent(id, ConnectionStatus.Connected, "Connected");
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"OnDeviceConnected TaskCanceledException {ex}");
             }
             catch (Exception ex)
             {
@@ -343,6 +364,10 @@ namespace BleLibrary.Services
                     " Advertisement {Advertisement} Type {Type}", id.Name, id.Id, id.Rssi, id.State, id.NativeDevice,
                     id.AdvertisementRecords, id.Type);
                 //RaiseConnectionEvent(id, ConnectionStatus.Disconnected, "Disconnected");
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"OnDeviceDisconnected TaskCanceledException {ex}");
             }
             catch (Exception ex)
             {
@@ -376,6 +401,10 @@ namespace BleLibrary.Services
                     _ = StartAutoReconnect(id, default); // fire-and-forget
                 }
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"OnDeviceConnectionLost TaskCanceledException {ex}");
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in OnDeviceConnectionLost");
@@ -384,71 +413,82 @@ namespace BleLibrary.Services
 
         private async Task DiscoverAndSubscribeAsync(IDevice device, CancellationToken ct = default)
         {
-            var services = await device.GetServicesAsync(ct);
-            foreach (var svc in services)
+            try
             {
-                //if (svc.Id != Uuids.Ftms && svc.Id != Uuids.Hrs && svc.Id != Uuids.Cps)
-                //{
-                //    continue;
-                //}
-
-                _logger.LogInformation($"Service UUID: {svc.Id}");
-
-                var characteristics = await svc.GetCharacteristicsAsync();
-
-                foreach (var chars in characteristics)
+                var services = await device.GetServicesAsync(ct);
+                foreach (var svc in services)
                 {
-                    _logger.LogInformation($"Characteristic UUID: {chars.Id}, Notifiable: {chars.CanUpdate}");
-                }
+                    //if (svc.Id != Uuids.Ftms && svc.Id != Uuids.Hrs && svc.Id != Uuids.Cps)
+                    //{
+                    //    continue;
+                    //}
 
-                // FTMS: Indoor Bike Data
-                var ftmsData = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
-                if (ftmsData != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
-                }
+                    _logger.LogInformation($"Service UUID: {svc.Id}");
 
-                // FTMS: Treadmill Data
-                var tm = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_TreadmillData);
-                if (tm != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, tm, ct);
-                }
+                    var characteristics = await svc.GetCharacteristicsAsync();
 
-                // FTMS: Rower Data
-                var rd = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_RowerData);
-                if (rd != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, rd, ct);
-                }
+                    foreach (var chars in characteristics)
+                    {
+                        _logger.LogInformation($"Characteristic UUID: {chars.Id}, Notifiable: {chars.CanUpdate}");
+                    }
 
-                // FTMS: Control Point
-                var ctrl = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
-                if (ctrl != null)
-                {
-                    _ftmsControlPoint = ctrl;
-                }
+                    // FTMS: Indoor Bike Data
+                    var ftmsData = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_IndoorBikeData);
+                    if (ftmsData != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, ftmsData, ct);
+                    }
 
-                // HRS: Heart Rate Measurement
-                var hr = characteristics.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
-                if (hr != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
-                }
+                    // FTMS: Treadmill Data
+                    var tm = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_TreadmillData);
+                    if (tm != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, tm, ct);
+                    }
 
-                // CSC: Cycling Power Measurement
-                var cs = characteristics.FirstOrDefault(c => c.Id == Uuids.Csc_CadenceMeasurement);
-                if (cs != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, cs, ct);
-                }
+                    // FTMS: Rower Data
+                    var rd = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_RowerData);
+                    if (rd != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, rd, ct);
+                    }
 
-                // CPS: Cycling Power Measurement
-                var cp = characteristics.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
-                if (cp != null)
-                {
-                    await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
+                    // FTMS: Control Point
+                    var ctrl = characteristics.FirstOrDefault(c => c.Id == Uuids.Ftms_FitnessMachineCtrlPoint);
+                    if (ctrl != null)
+                    {
+                        _ftmsControlPoint = ctrl;
+                    }
+
+                    // HRS: Heart Rate Measurement
+                    var hr = characteristics.FirstOrDefault(c => c.Id == Uuids.Hrs_HeartRateMeasurement);
+                    if (hr != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, hr, ct);
+                    }
+
+                    // CSC: Cycling Power Measurement
+                    var cs = characteristics.FirstOrDefault(c => c.Id == Uuids.Csc_CadenceMeasurement);
+                    if (cs != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, cs, ct);
+                    }
+
+                    // CPS: Cycling Power Measurement
+                    var cp = characteristics.FirstOrDefault(c => c.Id == Uuids.Cps_CyclingPowerMeasurement);
+                    if (cp != null)
+                    {
+                        await SubscribeCharacteristicAsync(device, svc.Id, cp, ct);
+                    }
                 }
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"DiscoverAndSubscribeAsync TaskCanceledException {ex}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in DiscoverAndSubscribeAsync");
             }
         }
 
@@ -489,6 +529,10 @@ namespace BleLibrary.Services
                             break; // first match wins
                         }
                     }
+                }
+                catch (TaskCanceledException ex)
+                {
+                    _logger.LogError($"SubscribeCharacteristicAsync TaskCanceledException {ex}");
                 }
                 catch (Exception ex)
                 {
@@ -557,6 +601,10 @@ namespace BleLibrary.Services
                         return;
                     }
                 }
+                catch (TaskCanceledException ex)
+                {
+                    _logger.LogError($"StartAutoReconnect TaskCanceledException {ex}");
+                }
                 catch (OperationCanceledException)
                 {
                     // Either we cancelled, or timeout hit
@@ -606,6 +654,10 @@ namespace BleLibrary.Services
 
                 await _adapter.StartScanningForDevicesAsync(scanCts.Token);
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"BriefScanAsync TaskCanceledException {ex}");
+            }
             catch (OperationCanceledException)
             {
                 // expected when window ends
@@ -633,7 +685,10 @@ namespace BleLibrary.Services
         {
             // iOS: ConnectToKnownDeviceAsync never times out by itself — we impose one.
             // Android: if OOR, this will throw quickly; our timeout is just a ceiling.
-            using var timeout = new CancellationTokenSource(ConnectTimeoutMs);
+            var timeoutMs = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+                ? WindowsConnectTimeoutMs
+                : ConnectTimeoutMs;
+            using var timeout = new CancellationTokenSource(timeoutMs);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(outer, timeout.Token);
 
             await _adapter.ConnectToKnownDeviceAsync(
@@ -647,13 +702,17 @@ namespace BleLibrary.Services
             if (_verificationRunning) return;
 
             _verificationRunning = true;
-            _logger.LogInformation($"StartDeviceVerification started");
+            _logger.LogInformation($"StartDeviceVerification started - Queue count: {_verificationQueue.Count}");
             _verificationWorker = Task.Run(async () =>
             {
+                int processedCount = 0;
                 while (_verificationQueue.TryDequeue(out var device))
                 {
+                    processedCount++;
+                    _logger.LogInformation($"Processing device {processedCount} from queue: {device.Name} ({device.Id})");
                     await VerifyDeviceAsync(device);
                 }
+                _logger.LogInformation($"Device verification completed - Processed {processedCount} devices");
                 _verificationRunning = false;
             });
         }
@@ -696,6 +755,10 @@ namespace BleLibrary.Services
                     _logger.LogInformation("Fitness Device: {Name}, Type: {Type}", id.Name, id.Type);
                     DeviceFound?.Invoke(this, new DeviceFoundEventArgs(id));
                 }
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"VerifyDeviceAsync TaskCanceledException {ex}");
             }
             catch (Exception ex)
             {
@@ -743,6 +806,10 @@ namespace BleLibrary.Services
 
                 _logger.LogInformation("Loaded devices from cache: {_verifiedDevices}", _verifiedDevices);
             }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"LoadVerifiedDevices TaskCanceledException {ex}");
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to load device from cache.");
@@ -763,6 +830,10 @@ namespace BleLibrary.Services
                 File.WriteAllText(_cachePath, json);
 
                 _logger.LogInformation("Saved device in cache: {_verifiedDevices}.", _verifiedDevices);
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError($"SaveVerifiedDevices TaskCanceledException {ex}");
             }
             catch (Exception ex)
             {

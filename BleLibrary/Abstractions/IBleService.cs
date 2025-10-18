@@ -24,6 +24,6 @@
         Task DisconnectDeviceAsync(DeviceIdentifier deviceId);
 
         /// <summary>FTMS Control Point (0x2AD9) write: foundation for ERG mode.</summary>
-        Task<bool> WriteFtmsControlCommandAsync(byte[] command, CancellationToken ct = default);
+        //Task<bool> WriteFtmsControlCommandAsync(byte[] command, CancellationToken ct = default);
     }
 }
